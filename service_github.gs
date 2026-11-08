@@ -87,51 +87,136 @@ function nextPageUrl_(headers) {
   return m ? m[1] : null;
 }
 
+function nowStamp_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm');
+}
+
+/**
+ * 対象行への更新リクエストを batchSize 件ずつ並列送信する。
+ * toRequest(row) でリクエストを作り、onResponse(row, res) で結果を行に反映する。
+ */
+function sendInBatches_(rows, toRequest, onResponse) {
+  for (let i = 0; i < rows.length; i += CONFIG.github.batchSize) {
+    const chunk = rows.slice(i, i + CONFIG.github.batchSize);
+    const responses = UrlFetchApp.fetchAll(chunk.map(toRequest));
+    responses.forEach((res, j) => onResponse(chunk[j], res));
+  }
+}
+
+function repoUrl_(row) {
+  return CONFIG.github.apiBase + '/repos/' + row.fullName;
+}
+
 /**
  * 変更行の説明を GitHub に反映する。
- * rows の各要素の original / result を書き換える（呼び出し側でシートに書き戻す）。
+ * rows の各要素の description / original / result を書き換える（呼び出し側でシートに書き戻す）。
  */
 function applyDescriptions_(rows) {
   const summary = { ok: 0, ng: 0 };
-  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm');
+  const stamp = nowStamp_();
 
   // 送信前の検証。送れない行はここで結果を確定させる
-  const targets = [];
-  rows.forEach(r => {
+  const targets = rows.filter(r => {
     const desc = normalizeDescription_(r.description);
-    if (r.archived) {
-      r.result = 'スキップ：アーカイブ済みのため変更できません';
-    } else if (!r.admin) {
-      r.result = 'スキップ：このリポジトリの編集権限がありません';
-    } else if (desc.length > CONFIG.github.maxDescriptionLength) {
-      r.result = 'スキップ：' + CONFIG.github.maxDescriptionLength + ' 文字以内にしてください（現在 ' + desc.length + ' 文字）';
-    } else {
-      targets.push({ row: r, desc: desc });
-      return;
+    let reason = '';
+    if (r.archived) reason = 'アーカイブ済みのため変更できません';
+    else if (!r.admin) reason = 'このリポジトリの編集権限がありません';
+    else if (desc.length > CONFIG.github.maxDescriptionLength) {
+      reason = CONFIG.github.maxDescriptionLength + ' 文字以内にしてください（現在 ' + desc.length + ' 文字）';
     }
-    summary.ng++;
+    if (reason) {
+      r.result = 'スキップ：' + reason;
+      summary.ng++;
+      return false;
+    }
+    return true;
   });
 
-  // まとめて並列送信（fetchAll）
-  for (let i = 0; i < targets.length; i += CONFIG.github.batchSize) {
-    const chunk = targets.slice(i, i + CONFIG.github.batchSize);
-    const requests = chunk.map(t =>
-      buildRequest_('patch', CONFIG.github.apiBase + '/repos/' + t.row.fullName, { description: t.desc })
-    );
-    const responses = UrlFetchApp.fetchAll(requests);
-    responses.forEach((res, j) => {
-      const r = chunk[j].row;
+  sendInBatches_(
+    targets,
+    r => buildRequest_('patch', repoUrl_(r), { description: normalizeDescription_(r.description) }),
+    (r, res) => {
       if (res.getResponseCode() === 200) {
         const saved = JSON.parse(res.getContentText()).description || '';
         r.description = saved;
         r.original = saved;
-        r.result = '反映済み（' + stamp + '）';
+        r.result = '説明を反映（' + stamp + '）';
         summary.ok++;
       } else {
-        r.result = '失敗：' + errorMessage_(res);
+        r.result = '説明の反映に失敗：' + errorMessage_(res);
         summary.ng++;
       }
-    });
-  }
+    }
+  );
+  return summary;
+}
+
+/**
+ * チェックした行をアーカイブする。
+ * 成功した行は archived を立て、チェックを外す。
+ */
+function archiveRepos_(rows) {
+  const summary = { ok: 0, ng: 0 };
+  const stamp = nowStamp_();
+
+  const targets = rows.filter(r => {
+    let reason = '';
+    if (r.archived) reason = 'すでにアーカイブ済みです';
+    else if (!r.admin) reason = 'このリポジトリの管理権限がありません';
+    if (reason) {
+      r.result = 'スキップ：' + reason;
+      summary.ng++;
+      return false;
+    }
+    return true;
+  });
+
+  sendInBatches_(
+    targets,
+    r => buildRequest_('patch', repoUrl_(r), { archived: true }),
+    (r, res) => {
+      if (res.getResponseCode() === 200) {
+        r.archived = true;
+        r.selected = false;
+        r.result = 'アーカイブ済み（' + stamp + '）';
+        summary.ok++;
+      } else {
+        r.result = 'アーカイブに失敗：' + errorMessage_(res);
+        summary.ng++;
+      }
+    }
+  );
+  return summary;
+}
+
+/**
+ * チェックした行のリポジトリを削除する（取り消し不可）。
+ * 成功した行には deleted を立てる（呼び出し側でシートから取り除く）。
+ */
+function deleteRepos_(rows) {
+  const summary = { ok: 0, ng: 0 };
+
+  const targets = rows.filter(r => {
+    if (!r.admin) {
+      r.result = 'スキップ：このリポジトリの管理権限がありません';
+      summary.ng++;
+      return false;
+    }
+    return true;
+  });
+
+  sendInBatches_(
+    targets,
+    r => buildRequest_('delete', repoUrl_(r)),
+    (r, res) => {
+      if (res.getResponseCode() === 204) {
+        r.deleted = true;
+        summary.ok++;
+      } else {
+        r.result = '削除に失敗：' + errorMessage_(res);
+        summary.ng++;
+      }
+    }
+  );
   return summary;
 }

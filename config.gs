@@ -21,7 +21,8 @@ const CONFIG = {
 
   // 列定義（並び順＝シート上の並び順）。key でコードから参照する。
   columns: [
-    { key: 'id',          label: 'ID',             width: 90 },
+    { key: 'selected',    label: '選択',           width: 50,  editable: true, checkbox: true },
+    { key: 'id',        label: 'ID',             width: 90 },
     { key: 'fullName',    label: 'リポジトリ',     width: 260 },
     { key: 'description', label: '説明（編集可）', width: 420, editable: true },
     { key: 'visibility',  label: '公開範囲',       width: 80 },
