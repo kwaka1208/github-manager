@@ -43,7 +43,21 @@ GitHub の Settings → Developer settings → Personal access tokens で作成�
 4. 「プロジェクトの設定」で「appsscript.json マニフェスト ファイルをエディタで表示する」をオンにし、`appsscript.json` の中身を貼り付ける
 5. 保存してスプレッドシートを再読み込みすると、メニューに「GitHub」が出る
 
-clasp を使う場合は、このフォルダで `clasp create --type sheets` と `clasp push` を実行してください。
+#### clasp を使う場合
+
+`.clasp.json` の `scriptId` を、スクリプトを入れたいスプレッドシートの Apps Script のスクリプト ID に書き換えてから push します。スクリプト ID は Apps Script エディタの「プロジェクトの設定」で確認できます。
+
+```bash
+npm install -g @google/clasp
+clasp login
+clasp push
+```
+
+push の対象は `.gs` ファイルと `appsscript.json` だけです（`.claspignore` で指定）。
+
+スプレッドシートを新しく作る場合は、先に `.clasp.json` を削除してから `clasp create --type sheets --title "GitHub リポジトリ管理"` を実行すると、スプレッドシートと `.clasp.json` が作られます。
+
+自分のスクリプト ID をコミットしたくない場合は、`git update-index --skip-worktree .clasp.json` で手元の変更を Git の追跡から外せます。
 
 ### 3. 初期設定
 
